@@ -70,13 +70,24 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'milk-route-default';
 // --- UTILITY FUNCTIONS ---
 const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-const getTodayString = () => new Date().toISOString().split('T')[0];
-const getCurrentMonthString = () => new Date().toISOString().slice(0, 7); // YYYY-MM
+// UPDATED: Get LOCAL today string to avoid UTC offset issues
+const getTodayString = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getCurrentMonthString = () => getTodayString().slice(0, 7); // YYYY-MM
 
 const getTomorrowString = () => {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().split('T')[0];
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 const getPreviousMonthString = (currentMonthStr) => {
@@ -90,8 +101,18 @@ const getPreviousMonthString = (currentMonthStr) => {
 };
 
 const getFormattedDate = (dateString) => {
+  if (!dateString) return '';
+  const [year, month, day] = dateString.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
   const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-  return new Date(dateString).toLocaleDateString('en-US', options);
+  return date.toLocaleDateString('en-US', options);
+};
+
+// NEW: Safe way to get Day Name from YYYY-MM-DD string without timezone shifts
+const getDayNameFromDateString = (dateString) => {
+  const [year, month, day] = dateString.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return DAYS_OF_WEEK[date.getDay()];
 };
 
 const getQtyForDay = (customer, dayName) => {
@@ -114,7 +135,8 @@ const getCustomerExceptions = (customer, monthStr, deliveries) => {
 
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(year, month - 1, d);
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    
     const dayName = DAYS_OF_WEEK[date.getDay()];
     const plannedQty = getQtyForDay(customer, dayName);
 
@@ -187,9 +209,8 @@ const calculateRemainingPotential = (customer, monthStr, deliveries) => {
   let remaining = 0;
 
   for (let d = todayDate; d <= daysInMonth; d++) {
-    const date = new Date(year, month - 1, d);
-    const dateStr = date.toISOString().split('T')[0];
-    const dayName = DAYS_OF_WEEK[date.getDay()];
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const dayName = getDayNameFromDateString(dateStr);
     const dailyQty = getQtyForDay(customer, dayName);
 
     if (dailyQty > 0) {
@@ -399,7 +420,8 @@ const CustomerForm = ({ onClose, onSave, defaultMonth, initialData = null }) => 
         return map;
       } else { return initialData.schedule; }
     }
-    const def = {}; DAYS_OF_WEEK.forEach(d => def[d] = 1); return def;
+    // UPDATED: Default to EMPTY object (no days selected)
+    return {}; 
   });
 
   const toggleDay = (day) => { const newMap = { ...scheduleMap }; if (newMap[day] !== undefined) { delete newMap[day]; } else { newMap[day] = 1; } setScheduleMap(newMap); };
@@ -477,12 +499,50 @@ export default function App() {
   const handleStoreJoin = (code) => { setStoreId(code); localStorage.setItem('milk_route_store_code', code); };
   const handleLogout = () => { setStoreId(null); localStorage.removeItem('milk_route_store_code'); };
 
+  // UPDATED: handleSaveCustomer to SYNC pending deliveries
   const handleSaveCustomer = async (data) => {
     if (!storeId) return;
     const { id, ...dataToSave } = JSON.parse(JSON.stringify(data));
+    
     try {
-      if (id) { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', `stores/${storeId}`, 'customers', id), { ...dataToSave, updatedAt: serverTimestamp() }); }
-      else { await addDoc(collection(db, 'artifacts', appId, 'public', 'data', `stores/${storeId}`, 'customers'), { ...dataToSave, createdAt: serverTimestamp() }); }
+      const batch = writeBatch(db);
+      const storePath = `stores/${storeId}`;
+      
+      if (id) {
+        // 1. Update Customer Doc
+        const custRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'customers', id);
+        batch.update(custRef, { ...dataToSave, updatedAt: serverTimestamp() });
+
+        // 2. Sync Pending Deliveries (Today & Future)
+        const todayStr = getTodayString();
+        const pendingDeliveriesToSync = deliveries.filter(d => 
+          d.customerId === id && 
+          d.status === 'pending' && 
+          d.date >= todayStr && 
+          !d.isRescheduled 
+        );
+
+        pendingDeliveriesToSync.forEach(delivery => {
+          const dayName = getDayNameFromDateString(delivery.date); // Use Safe Day Parser
+          const tempCustomerObj = { schedule: dataToSave.schedule }; 
+          const newQty = getQtyForDay(tempCustomerObj, dayName);
+          
+          const deliveryRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'deliveries', delivery.id);
+
+          if (newQty > 0) {
+            if (delivery.qty !== newQty) {
+              batch.update(deliveryRef, { qty: newQty });
+            }
+          } else {
+            batch.delete(deliveryRef);
+          }
+        });
+      } else {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', storePath, 'customers'), { ...dataToSave, createdAt: serverTimestamp() });
+        return; 
+      }
+      
+      await batch.commit();
     } catch (e) { console.error(e); }
   };
 
@@ -497,9 +557,7 @@ export default function App() {
       const custRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'customers', id);
       batch.delete(custRef);
 
-      // 2. Find and delete all deliveries for this customer (in local state)
-      // This works because we have all deliveries loaded. 
-      // If we didn't, we'd need a backend query, but this is sufficient for MVP scale.
+      // 2. Find and delete all deliveries for this customer
       const toDelete = deliveries.filter(d => d.customerId === id);
       toDelete.forEach(d => {
         const dRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'deliveries', d.id);
@@ -571,8 +629,7 @@ export default function App() {
     if (!storeId) return;
     const selectedDate = todayViewDate; // Use state
     const currentMonth = selectedDate.slice(0, 7); 
-    const selectedDayObj = new Date(selectedDate);
-    const todayDayName = DAYS_OF_WEEK[selectedDayObj.getDay()]; 
+    const todayDayName = getDayNameFromDateString(selectedDate); // Use Safe Parser
     
     // Find customers active in the month of the SELECTED DATE
     const relevantCustomers = customers.filter(c => c.targetMonth === currentMonth && getQtyForDay(c, todayDayName) > 0);
@@ -635,13 +692,16 @@ export default function App() {
     } catch(e) { console.error(e); }
   };
 
-  // UPDATED: Filter by todayViewDate
+  // UPDATED: Filter by todayViewDate AND VALID CUSTOMER (Ghost Filter)
   const currentViewDeliveries = useMemo(() => {
-    return deliveries.filter(d => d.date === todayViewDate).sort((a, b) => {
-      const statusOrder = { 'pending': 0, 'delivered': 1, 'skipped': 2 };
-      return statusOrder[a.status] - statusOrder[b.status];
-    });
-  }, [deliveries, todayViewDate]);
+    const validCustomerIds = new Set(customers.map(c => c.id)); 
+    return deliveries
+      .filter(d => d.date === todayViewDate && validCustomerIds.has(d.customerId))
+      .sort((a, b) => {
+        const statusOrder = { 'pending': 0, 'delivered': 1, 'skipped': 2 };
+        return statusOrder[a.status] - statusOrder[b.status];
+      });
+  }, [deliveries, todayViewDate, customers]);
 
   const visibleCustomers = useMemo(() => customers.filter(c => c.targetMonth === viewMonth), [customers, viewMonth]);
   const previousMonthCustomers = useMemo(() => customers.filter(c => c.targetMonth === getPreviousMonthString(viewMonth)), [customers, viewMonth]);
@@ -806,7 +866,16 @@ export default function App() {
       {/* NAV */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 pb-safe z-20">
         <div className="max-w-md mx-auto flex justify-around items-center h-16">
-          <button onClick={() => setActiveTab('today')} className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'today' ? 'text-blue-600' : 'text-gray-400'}`}><Truck className="w-6 h-6" /><span className="text-[10px] font-bold">Today</span></button>
+          <button 
+            onClick={() => {
+              setActiveTab('today');
+              setTodayViewDate(getTodayString()); // RESETS DATE TO TODAY
+            }} 
+            className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'today' ? 'text-blue-600' : 'text-gray-400'}`}
+          >
+            <Truck className="w-6 h-6" />
+            <span className="text-[10px] font-bold">Today</span>
+          </button>
           <button onClick={() => setActiveTab('customers')} className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'customers' ? 'text-blue-600' : 'text-gray-400'}`}><Users className="w-6 h-6" /><span className="text-[10px] font-bold">Customers</span></button>
           <button onClick={() => setActiveTab('reports')} className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${activeTab === 'reports' ? 'text-blue-600' : 'text-gray-400'}`}><BarChart3 className="w-6 h-6" /><span className="text-[10px] font-bold">Reports</span></button>
         </div>
