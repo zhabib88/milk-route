@@ -25,7 +25,9 @@ import {
   Download,
   Upload,
   AlertOctagon,
-  ShieldAlert
+  ShieldAlert,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -63,7 +65,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// Updated App ID to reflect new branding
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'milk-route-default';
 
 // --- UTILITY FUNCTIONS ---
@@ -275,14 +276,14 @@ const DeleteConfirmModal = ({ customer, onClose, onConfirm }) => (
       </div>
       <h3 className="font-bold text-lg text-gray-800 mb-2">Delete Customer?</h3>
       <p className="text-sm text-gray-500 mb-6">
-        Are you sure you want to remove <strong>{customer.name}</strong>? This action cannot be undone.
+        This will delete <strong>{customer.name}</strong> and all their <strong>history & scheduled deliveries</strong>. This cannot be undone.
       </p>
       <div className="flex gap-3">
         <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-700 font-bold rounded-xl hover:bg-gray-200">
           Cancel
         </button>
         <button onClick={() => onConfirm(customer.id)} className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700">
-          Yes, Delete
+          Yes, Delete All
         </button>
       </div>
     </div>
@@ -437,7 +438,10 @@ export default function App() {
   const [editingCustomer, setEditingCustomer] = useState(null); 
   const [deleteCandidate, setDeleteCandidate] = useState(null);
   
+  // DATE VIEW STATE
   const [viewMonth, setViewMonth] = useState(getCurrentMonthString());
+  const [todayViewDate, setTodayViewDate] = useState(getTodayString()); // NEW: For "Today" tab travel
+
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   
@@ -482,9 +486,27 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
+  // UPDATED: CLEAN DELETE
   const confirmDeleteCustomer = async (id) => {
+    if (!storeId) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', `stores/${storeId}`, 'customers', id));
+      const batch = writeBatch(db);
+      const storePath = `stores/${storeId}`;
+
+      // 1. Delete customer doc
+      const custRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'customers', id);
+      batch.delete(custRef);
+
+      // 2. Find and delete all deliveries for this customer (in local state)
+      // This works because we have all deliveries loaded. 
+      // If we didn't, we'd need a backend query, but this is sufficient for MVP scale.
+      const toDelete = deliveries.filter(d => d.customerId === id);
+      toDelete.forEach(d => {
+        const dRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'deliveries', d.id);
+        batch.delete(dRef);
+      });
+
+      await batch.commit();
       setDeleteCandidate(null);
     } catch(e) { console.error("Error deleting", e); }
   };
@@ -544,20 +566,37 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  // UPDATED: Start route for a SPECIFIC DATE (todayViewDate)
   const startDailyRoute = async () => {
     if (!storeId) return;
-    const today = getTodayString();
-    const currentMonth = today.slice(0, 7); 
-    const todayDayName = DAYS_OF_WEEK[new Date().getDay()]; 
+    const selectedDate = todayViewDate; // Use state
+    const currentMonth = selectedDate.slice(0, 7); 
+    const selectedDayObj = new Date(selectedDate);
+    const todayDayName = DAYS_OF_WEEK[selectedDayObj.getDay()]; 
+    
+    // Find customers active in the month of the SELECTED DATE
     const relevantCustomers = customers.filter(c => c.targetMonth === currentMonth && getQtyForDay(c, todayDayName) > 0);
-    const existingRegularDeliveries = new Set(deliveries.filter(d => d.date === today && !d.isRescheduled).map(d => d.customerId));
+    
+    const existingRegularDeliveries = new Set(
+      deliveries.filter(d => d.date === selectedDate && !d.isRescheduled).map(d => d.customerId)
+    );
+    
     const newDeliveries = relevantCustomers.filter(c => !existingRegularDeliveries.has(c.id));
     if (newDeliveries.length === 0) return;
+    
     try {
       const batch = writeBatch(db);
       newDeliveries.forEach(customer => {
         const newDocRef = doc(collection(db, 'artifacts', appId, 'public', 'data', `stores/${storeId}`, 'deliveries'));
-        batch.set(newDocRef, { customerId: customer.id, customerName: customer.name, customerAddress: customer.address, qty: getQtyForDay(customer, todayDayName), date: today, status: 'pending', timestamp: serverTimestamp() });
+        batch.set(newDocRef, { 
+          customerId: customer.id, 
+          customerName: customer.name, 
+          customerAddress: customer.address, 
+          qty: getQtyForDay(customer, todayDayName), 
+          date: selectedDate, // Use selected date
+          status: 'pending', 
+          timestamp: serverTimestamp() 
+        });
       });
       await batch.commit();
     } catch (e) { console.error(e); }
@@ -596,13 +635,13 @@ export default function App() {
     } catch(e) { console.error(e); }
   };
 
-  const todaysDeliveries = useMemo(() => {
-    const today = getTodayString();
-    return deliveries.filter(d => d.date === today).sort((a, b) => {
+  // UPDATED: Filter by todayViewDate
+  const currentViewDeliveries = useMemo(() => {
+    return deliveries.filter(d => d.date === todayViewDate).sort((a, b) => {
       const statusOrder = { 'pending': 0, 'delivered': 1, 'skipped': 2 };
       return statusOrder[a.status] - statusOrder[b.status];
     });
-  }, [deliveries]);
+  }, [deliveries, todayViewDate]);
 
   const visibleCustomers = useMemo(() => customers.filter(c => c.targetMonth === viewMonth), [customers, viewMonth]);
   const previousMonthCustomers = useMemo(() => customers.filter(c => c.targetMonth === getPreviousMonthString(viewMonth)), [customers, viewMonth]);
@@ -631,21 +670,31 @@ export default function App() {
       <main className="max-w-md mx-auto p-4">
         {activeTab === 'today' && (
           <div className="animate-in slide-in-from-right duration-300">
-            <div className="flex justify-between items-end mb-6">
-              <div><h2 className="text-2xl font-bold text-slate-800">Today's Run</h2><p className="text-sm text-slate-500 font-medium">{getFormattedDate(new Date())}</p></div>
-              <div className="text-right"><span className="text-3xl font-bold text-blue-600">{todaysDeliveries.filter(d => d.status === 'delivered').length}<span className="text-lg text-gray-400 font-normal">/{todaysDeliveries.length}</span></span></div>
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-800">Run Sheet</h2>
+                <div className="relative mt-1">
+                  <input 
+                    type="date" 
+                    value={todayViewDate}
+                    onChange={(e) => setTodayViewDate(e.target.value)}
+                    className="bg-transparent font-medium text-slate-500 text-sm border-b border-gray-300 focus:border-blue-500 outline-none pb-0.5"
+                  />
+                </div>
+              </div>
+              <div className="text-right"><span className="text-3xl font-bold text-blue-600">{currentViewDeliveries.filter(d => d.status === 'delivered').length}<span className="text-lg text-gray-400 font-normal">/{currentViewDeliveries.length}</span></span></div>
             </div>
-            {todaysDeliveries.length === 0 ? (
+            {currentViewDeliveries.length === 0 ? (
               <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 text-center space-y-4">
                 <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto"><Truck className="w-8 h-8 text-blue-500" /></div>
                 <h3 className="text-lg font-semibold text-gray-800">Ready to start?</h3>
-                <p className="text-gray-500 text-sm">Generate the delivery list for <strong>{getFormattedDate(new Date())}</strong>.</p>
-                <button onClick={startDailyRoute} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-blue-200 shadow-lg hover:bg-blue-700 active:scale-95 transition-all">Start Today's Route</button>
+                <p className="text-gray-500 text-sm">Generate the delivery list for <strong>{getFormattedDate(todayViewDate)}</strong>.</p>
+                <button onClick={startDailyRoute} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl shadow-blue-200 shadow-lg hover:bg-blue-700 active:scale-95 transition-all">Start Route for {getFormattedDate(todayViewDate)}</button>
               </div>
             ) : (
               <div className="space-y-3">
                  <button onClick={startDailyRoute} className="w-full py-2 bg-blue-50 text-blue-600 text-sm font-semibold rounded-lg hover:bg-blue-100 mb-4 border border-blue-100 flex items-center justify-center gap-2"><RefreshCw className="w-3 h-3" /> Refresh / Add Missing</button>
-                {todaysDeliveries.map(delivery => (
+                {currentViewDeliveries.map(delivery => (
                   <div key={delivery.id} onClick={() => { if(delivery.status === 'skipped') setSelectedDelivery(delivery) }} className={`relative overflow-hidden bg-white rounded-xl shadow-sm border transition-all duration-200 ${delivery.status === 'delivered' ? 'border-green-200 bg-green-50/30' : delivery.status === 'skipped' ? 'border-gray-200 opacity-60 cursor-pointer' : 'border-gray-100'}`}>
                     <div className="p-4 flex items-center justify-between">
                       <div className="flex-1 pr-2">
