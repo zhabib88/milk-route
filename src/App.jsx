@@ -53,12 +53,12 @@ import {
   setDoc
 } from 'firebase/firestore';
 
-// ==========================================================================
-// [ACTION REQUIRED FOR VERCEL]
-// 1. Run 'npm install xlsx' in your terminal
-// 2. UNCOMMENT the line below before pushing to GitHub:
+// ==========================================================================================
+// [DEPLOYMENT STEP] 
+// 1. Run 'npm install xlsx' in your local terminal
+// 2. UNCOMMENT the line below to enable real Excel export on Vercel:
  import * as XLSX from 'xlsx';
-// ==========================================================================
+// ==========================================================================================
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -184,6 +184,7 @@ const calculateMonthlyPotential = (customer, monthStr, deliveries) => {
   const daysInMonth = new Date(year, month, 0).getDate(); 
   
   let total = 0;
+  // Default to start of month if no specific start date set
   const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
 
   for (let d = 1; d <= daysInMonth; d++) {
@@ -616,161 +617,105 @@ export default function App() {
     } catch (e) { console.error(e); setIsImporting(false); }
   };
 
-  // --- 1. EXCEL EXPORT FUNCTION (UNCOMMENT THIS FOR VERCEL) ---
+  // --- 1. EXCEL EXPORT (UNCOMMENT FOR VERCEL) ---
+   const handleExportExcel = () => {
+     const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
+     if (customersToExport.length === 0) {
+       alert("No customers found for " + viewMonth);
+       return;
+     }
+     
+     if (typeof XLSX === 'undefined') {
+       alert("Excel library not loaded. Please run 'npm install xlsx' locally.");
+       return;
+     }
   
-  const handleExportExcel = () => {
-    const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
-    if (customersToExport.length === 0) {
-      alert("No customers found for " + viewMonth);
-      return;
-    }
-    
-    // IMPORTANT: Ensure XLSX is imported at the top
-    if (typeof XLSX === 'undefined') {
-      alert("Excel library not loaded. Please run 'npm install xlsx' locally.");
-      return;
-    }
+     const wb = XLSX.utils.book_new();
+     const [year, month] = viewMonth.split('-').map(Number);
+     const daysInMonth = new Date(year, month, 0).getDate();
+  
+     // SUMMARY SHEET
+     const summaryHeaders = ['Customer Name', 'Phone', 'Address', 'Total Planned', 'Total Delivered', 'Remaining'];
+     const summaryRows = [];
+     let grandTotalDelivered = 0;
+     let grandTotalRemaining = 0;
 
-    const wb = XLSX.utils.book_new();
-    const [year, month] = viewMonth.split('-').map(Number);
-    const daysInMonth = new Date(year, month, 0).getDate();
-
-    // --- SUMMARY SHEET ---
-    const summaryHeaders = ['Customer Name', 'Phone', 'Address', 'Total Planned', 'Total Delivered', 'Remaining'];
-    const summaryRows = [];
-    let grandTotalDelivered = 0;
-    let grandTotalRemaining = 0;
-
-    customersToExport.forEach(c => {
+     customersToExport.forEach(c => {
         const stats = calculateMonthlyPotential(c, viewMonth, deliveries);
         const remaining = calculateRemainingPotential(c, viewMonth, deliveries);
         const delivered = deliveredStats[c.id] || 0;
         grandTotalDelivered += delivered;
         grandTotalRemaining += remaining;
         summaryRows.push([c.name, c.phone || '-', c.address || '-', stats.total, delivered, remaining]);
-    });
-    summaryRows.push([]);
-    summaryRows.push(['GRAND TOTAL', '', '', '', grandTotalDelivered, grandTotalRemaining]);
+     });
+     summaryRows.push([]);
+     summaryRows.push(['GRAND TOTAL', '', '', '', grandTotalDelivered, grandTotalRemaining]);
     
-    const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeaders, ...summaryRows]);
-    XLSX.utils.book_append_sheet(wb, wsSummary, "SUMMARY");
+     const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeaders, ...summaryRows]);
+     XLSX.utils.book_append_sheet(wb, wsSummary, "SUMMARY");
+  
+     // INDIVIDUAL SHEETS
+     customersToExport.forEach(customer => {
+       const wsData = [
+         ['Customer Name:', customer.name],
+         ['Phone:', customer.phone || '-'],
+         ['Address:', customer.address || '-'],
+         [],
+         ['Date', 'Day', 'Quantity (L)', 'Status']
+       ];
+  
+       const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
 
-    // --- INDIVIDUAL SHEETS ---
-    customersToExport.forEach(customer => {
-      const wsData = [
-        ['Customer Name:', customer.name],
-        ['Phone:', customer.phone || '-'],
-        ['Address:', customer.address || '-'],
-        [],
-        ['Date', 'Day', 'Quantity (L)', 'Status']
-      ];
+       for (let d = 1; d <= daysInMonth; d++) {
+         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+         const dayName = getDayNameFromDateString(dateStr);
+         
+         const plannedQty = getQtyForDay(customer, dayName);
+         const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
+         
+         let qtyDisplay = '-';
+         let status = 'No Delivery';
+         const isDateValid = dateStr >= effectiveStartDate;
 
-      const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
-
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        const dayName = getDayNameFromDateString(dateStr);
-        
-        const plannedQty = getQtyForDay(customer, dayName);
-        const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
-        
-        let qtyDisplay = '-';
-        let status = 'No Delivery';
-        const isDateValid = dateStr >= effectiveStartDate;
-
-        if ((plannedQty > 0 && isDateValid) || delivery) {
-           qtyDisplay = (plannedQty > 0 && isDateValid) ? plannedQty : '-';
-           status = 'Pending'; 
-
-           if (delivery) {
-             if (delivery.isRescheduled) {
-               qtyDisplay = delivery.qty + ' (Rescheduled)';
-               status = 'Extra';
-             } else if (delivery.status === 'delivered') {
-               status = 'Delivered';
-             } else if (delivery.status === 'skipped') {
-               status = 'Skipped';
-               qtyDisplay = '0'; 
-             }
-           }
-           wsData.push([dateStr, dayName, qtyDisplay, status]);
-        } else {
+         if ((plannedQty > 0 && isDateValid) || delivery) {
+            qtyDisplay = (plannedQty > 0 && isDateValid) ? plannedQty : '-';
+            status = 'Pending'; 
+  
+            if (delivery) {
+              if (delivery.isRescheduled) {
+                qtyDisplay = delivery.qty + ' (Rescheduled)';
+                status = 'Extra';
+              } else if (delivery.status === 'delivered') {
+                status = 'Delivered';
+              } else if (delivery.status === 'skipped') {
+                status = 'Skipped';
+                qtyDisplay = '0'; 
+              }
+            }
             wsData.push([dateStr, dayName, qtyDisplay, status]);
-        }
-      }
-
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
-      let sheetName = (customer.name || 'Customer').replace(/[\\/?*[\]]/g, "").substring(0, 30);
-      let uniqueSheetName = sheetName;
-      let counter = 1;
-      while (wb.SheetNames.includes(uniqueSheetName)) {
-        uniqueSheetName = `${sheetName.substring(0, 25)}_${counter}`;
-        counter++;
-      }
-      XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName);
-    });
-
-    XLSX.writeFile(wb, `MilkRoute_Plan_${viewMonth}.xlsx`);
+         } else {
+             wsData.push([dateStr, dayName, qtyDisplay, status]);
+         }
+       }
+  
+       const ws = XLSX.utils.aoa_to_sheet(wsData);
+       let sheetName = (customer.name || 'Customer').replace(/[\\/?*[\]]/g, "").substring(0, 30);
+       let uniqueSheetName = sheetName;
+       let counter = 1;
+       while (wb.SheetNames.includes(uniqueSheetName)) {
+         uniqueSheetName = `${sheetName.substring(0, 25)}_${counter}`;
+         counter++;
+       }
+       XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName);
+     });
+  
+     XLSX.writeFile(wb, `MilkRoute_Plan_${viewMonth}.xlsx`);
   };
   
-  /*
-  // --- 2. TEMPORARY CSV EXPORT (ACTIVE IN PREVIEW) ---
-  // DELETE THIS FUNCTION when you deploy to Vercel and use the Excel one above
-  const handleExportExcel = () => {
-    const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
-    if (customersToExport.length === 0) {
-      alert("No customers found for " + viewMonth);
-      return;
-    }
 
-    let csvContent = "data:text/csv;charset=utf-8,";
-    csvContent += "Customer Name,Phone,Address,Date,Day,Quantity (L),Status\n";
-
-    const [year, month] = viewMonth.split('-').map(Number);
-    const daysInMonth = new Date(year, month, 0).getDate();
-
-    customersToExport.forEach(customer => {
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-        const dayName = getDayNameFromDateString(dateStr);
-        
-        const plannedQty = getQtyForDay(customer, dayName);
-        const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
-        
-        if (plannedQty > 0 || delivery) {
-          let qtyDisplay = plannedQty > 0 ? plannedQty : '-';
-          let status = 'Pending';
-
-          if (delivery) {
-             if (delivery.isRescheduled) {
-               qtyDisplay = delivery.qty + ' (Rescheduled)';
-               status = 'Extra';
-             } else if (delivery.status === 'delivered') {
-               status = 'Delivered';
-             } else if (delivery.status === 'skipped') {
-               status = 'Skipped';
-               qtyDisplay = '0'; 
-             }
-           }
-           
-           const safeName = `"${(customer.name || '').replace(/"/g, '""')}"`;
-           const safePhone = `"${(customer.phone || '').replace(/"/g, '""')}"`;
-           const safeAddress = `"${(customer.address || '').replace(/"/g, '""')}"`;
-
-           csvContent += `${safeName},${safePhone},${safeAddress},${dateStr},${dayName},"${qtyDisplay}",${status}\n`;
-        }
-      }
-    });
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `MilkRoute_Plan_${viewMonth}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
+  // --- 2. TEMPORARY CSV EXPORT (PREVIEW SAFE) ---
+  // DELETE THIS WHOLE FUNCTION WHEN DEPLOYING TO VERCEL
+  
   const handleExportData = () => {
     if (!storeId) return;
     const exportData = { store: storeId, exportedAt: new Date().toISOString(), customers: customers, deliveries: deliveries };
@@ -778,7 +723,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a'); link.href = url; link.download = `milk-route-backup-${getTodayString()}.json`;
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  };*/
+  };
 
   const handleRestoreClick = () => { if (fileInputRef.current) fileInputRef.current.click(); };
 
