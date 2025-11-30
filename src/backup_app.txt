@@ -27,7 +27,9 @@ import {
   AlertOctagon,
   ShieldAlert,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Search,
+  FileSpreadsheet
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -51,6 +53,11 @@ import {
   setDoc
 } from 'firebase/firestore';
 
+// ==============================================================================================
+// 1. UNCOMMENT THE LINE BELOW IN YOUR LOCAL PROJECT FOR EXCEL EXPORT
+ import * as XLSX from 'xlsx';
+// ==============================================================================================
+
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyAzpP1ulElPjKq9EjzmQE34drWsMcRWKbQ",
@@ -70,7 +77,6 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'milk-route-default';
 // --- UTILITY FUNCTIONS ---
 const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// UPDATED: Get LOCAL today string to avoid UTC offset issues
 const getTodayString = () => {
   const d = new Date();
   const year = d.getFullYear();
@@ -108,7 +114,6 @@ const getFormattedDate = (dateString) => {
   return date.toLocaleDateString('en-US', options);
 };
 
-// NEW: Safe way to get Day Name from YYYY-MM-DD string without timezone shifts
 const getDayNameFromDateString = (dateString) => {
   const [year, month, day] = dateString.split('-').map(Number);
   const date = new Date(year, month - 1, day);
@@ -420,7 +425,6 @@ const CustomerForm = ({ onClose, onSave, defaultMonth, initialData = null }) => 
         return map;
       } else { return initialData.schedule; }
     }
-    // UPDATED: Default to EMPTY object (no days selected)
     return {}; 
   });
 
@@ -459,10 +463,10 @@ export default function App() {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null); 
   const [deleteCandidate, setDeleteCandidate] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
   
-  // DATE VIEW STATE
   const [viewMonth, setViewMonth] = useState(getCurrentMonthString());
-  const [todayViewDate, setTodayViewDate] = useState(getTodayString()); // NEW: For "Today" tab travel
+  const [todayViewDate, setTodayViewDate] = useState(getTodayString()); 
 
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -499,7 +503,6 @@ export default function App() {
   const handleStoreJoin = (code) => { setStoreId(code); localStorage.setItem('milk_route_store_code', code); };
   const handleLogout = () => { setStoreId(null); localStorage.removeItem('milk_route_store_code'); };
 
-  // UPDATED: handleSaveCustomer to SYNC pending deliveries
   const handleSaveCustomer = async (data) => {
     if (!storeId) return;
     const { id, ...dataToSave } = JSON.parse(JSON.stringify(data));
@@ -509,11 +512,9 @@ export default function App() {
       const storePath = `stores/${storeId}`;
       
       if (id) {
-        // 1. Update Customer Doc
         const custRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'customers', id);
         batch.update(custRef, { ...dataToSave, updatedAt: serverTimestamp() });
 
-        // 2. Sync Pending Deliveries (Today & Future)
         const todayStr = getTodayString();
         const pendingDeliveriesToSync = deliveries.filter(d => 
           d.customerId === id && 
@@ -523,7 +524,7 @@ export default function App() {
         );
 
         pendingDeliveriesToSync.forEach(delivery => {
-          const dayName = getDayNameFromDateString(delivery.date); // Use Safe Day Parser
+          const dayName = getDayNameFromDateString(delivery.date); 
           const tempCustomerObj = { schedule: dataToSave.schedule }; 
           const newQty = getQtyForDay(tempCustomerObj, dayName);
           
@@ -546,24 +547,18 @@ export default function App() {
     } catch (e) { console.error(e); }
   };
 
-  // UPDATED: CLEAN DELETE
   const confirmDeleteCustomer = async (id) => {
     if (!storeId) return;
     try {
       const batch = writeBatch(db);
       const storePath = `stores/${storeId}`;
-
-      // 1. Delete customer doc
       const custRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'customers', id);
       batch.delete(custRef);
-
-      // 2. Find and delete all deliveries for this customer
       const toDelete = deliveries.filter(d => d.customerId === id);
       toDelete.forEach(d => {
         const dRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'deliveries', d.id);
         batch.delete(dRef);
       });
-
       await batch.commit();
       setDeleteCandidate(null);
     } catch(e) { console.error("Error deleting", e); }
@@ -593,6 +588,141 @@ export default function App() {
       setTimeout(() => setIsImporting(false), 500);
     } catch (e) { console.error(e); setIsImporting(false); }
   };
+
+  // =========================================================================================
+  // UNCOMMENT THE FUNCTION BELOW AND DELETE THE CSV FUNCTION WHEN DEPLOYING TO VERCEL
+  // =========================================================================================
+  
+  const handleExportExcel = () => {
+     const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
+     if (customersToExport.length === 0) {
+       alert("No customers found for " + viewMonth);
+       return;
+     }
+     
+     // Check if XLSX is available (will be true in your local environment after npm install)
+     if (typeof XLSX === 'undefined') {
+       alert("Excel library not loaded. Please use CSV export for now.");
+       return;
+     }
+  
+     const wb = XLSX.utils.book_new();
+     const [year, month] = viewMonth.split('-').map(Number);
+     const daysInMonth = new Date(year, month, 0).getDate();
+  
+     customersToExport.forEach(customer => {
+       const wsData = [
+         ['Customer Name:', customer.name],
+         ['Phone:', customer.phone || '-'],
+         ['Address:', customer.address || '-'],
+         [],
+         ['Date', 'Day', 'Quantity (L)', 'Status']
+       ];
+  
+       for (let d = 1; d <= daysInMonth; d++) {
+         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+         const dayName = getDayNameFromDateString(dateStr);
+         
+         const plannedQty = getQtyForDay(customer, dayName);
+         const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
+         
+         let qtyDisplay = '-';
+         let status = 'No Delivery';
+  
+         if (plannedQty > 0 || delivery) {
+            qtyDisplay = plannedQty > 0 ? plannedQty : '-';
+            status = 'Pending'; 
+  
+            if (delivery) {
+              if (delivery.isRescheduled) {
+                qtyDisplay = delivery.qty + ' (Rescheduled)';
+                status = 'Extra';
+              } else if (delivery.status === 'delivered') {
+                status = 'Delivered';
+              } else if (delivery.status === 'skipped') {
+                status = 'Skipped';
+                qtyDisplay = '0'; 
+              }
+            }
+            wsData.push([dateStr, dayName, qtyDisplay, status]);
+         } else {
+             wsData.push([dateStr, dayName, qtyDisplay, status]);
+         }
+       }
+  
+       const ws = XLSX.utils.aoa_to_sheet(wsData);
+       let sheetName = (customer.name || 'Customer').replace(/[\\/?*[\]]/g, "").substring(0, 30);
+       let uniqueSheetName = sheetName;
+       let counter = 1;
+       while (wb.SheetNames.includes(uniqueSheetName)) {
+         uniqueSheetName = `${sheetName.substring(0, 25)}_${counter}`;
+         counter++;
+       }
+       XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName);
+     });
+  
+     XLSX.writeFile(wb, `MilkRoute_Plan_${viewMonth}.xlsx`);
+  };
+
+  /*
+  // =========================================================================================
+  // TEMPORARY CSV EXPORT (DELETE THIS FUNCTION WHEN USING THE EXCEL ONE ABOVE)
+  // =========================================================================================
+  const handleExportExcel = () => {
+    const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
+    if (customersToExport.length === 0) {
+      alert("No customers found for " + viewMonth);
+      return;
+    }
+
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "Customer Name,Phone,Address,Date,Day,Quantity (L),Status\n";
+
+    const [year, month] = viewMonth.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    customersToExport.forEach(customer => {
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dayName = getDayNameFromDateString(dateStr);
+        
+        const plannedQty = getQtyForDay(customer, dayName);
+        const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
+        
+        if (plannedQty > 0 || delivery) {
+          let qtyDisplay = plannedQty > 0 ? plannedQty : '-';
+          let status = 'Pending';
+
+          if (delivery) {
+             if (delivery.isRescheduled) {
+               qtyDisplay = delivery.qty + ' (Rescheduled)';
+               status = 'Extra';
+             } else if (delivery.status === 'delivered') {
+               status = 'Delivered';
+             } else if (delivery.status === 'skipped') {
+               status = 'Skipped';
+               qtyDisplay = '0'; 
+             }
+          }
+          
+          const safeName = `"${(customer.name || '').replace(/"/g, '""')}"`;
+          const safePhone = `"${(customer.phone || '').replace(/"/g, '""')}"`;
+          const safeAddress = `"${(customer.address || '').replace(/"/g, '""')}"`;
+
+          csvContent += `${safeName},${safePhone},${safeAddress},${dateStr},${dayName},"${qtyDisplay}",${status}\n`;
+        }
+      }
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `MilkRoute_Plan_${viewMonth}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  */
 
   const handleExportData = () => {
     if (!storeId) return;
@@ -624,7 +754,6 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // UPDATED: Start route for a SPECIFIC DATE (todayViewDate)
   const startDailyRoute = async () => {
     if (!storeId) return;
     const selectedDate = todayViewDate; // Use state
@@ -692,7 +821,6 @@ export default function App() {
     } catch(e) { console.error(e); }
   };
 
-  // UPDATED: Filter by todayViewDate AND VALID CUSTOMER (Ghost Filter)
   const currentViewDeliveries = useMemo(() => {
     const validCustomerIds = new Set(customers.map(c => c.id)); 
     return deliveries
@@ -703,7 +831,16 @@ export default function App() {
       });
   }, [deliveries, todayViewDate, customers]);
 
-  const visibleCustomers = useMemo(() => customers.filter(c => c.targetMonth === viewMonth), [customers, viewMonth]);
+  const visibleCustomers = useMemo(() => {
+    return customers.filter(c => {
+      const matchesMonth = c.targetMonth === viewMonth;
+      const matchesSearch = searchTerm 
+        ? c.name.toLowerCase().includes(searchTerm.toLowerCase()) 
+        : true;
+      return matchesMonth && matchesSearch;
+    });
+  }, [customers, viewMonth, searchTerm]);
+
   const previousMonthCustomers = useMemo(() => customers.filter(c => c.targetMonth === getPreviousMonthString(viewMonth)), [customers, viewMonth]);
   const reportData = useMemo(() => deliveries.filter(d => d.date.startsWith(viewMonth) && d.status === 'delivered').reduce((acc, curr) => {
     if (!acc[curr.customerId]) acc[curr.customerId] = { name: curr.customerName, totalQty: 0, deliveriesCount: 0 };
@@ -794,8 +931,26 @@ export default function App() {
         {activeTab === 'customers' && (
           <div className="animate-in slide-in-from-right duration-300 pb-20">
             <div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-bold text-slate-800">Customers</h2><button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
-            <div className="bg-white p-3 rounded-lg border border-gray-200 mb-4 shadow-sm flex items-center justify-between"><span className="text-xs font-bold text-gray-500 uppercase">Viewing List For:</span><input type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} className="bg-transparent font-medium text-slate-800 outline-none text-right" /></div>
-            {visibleCustomers.length === 0 && previousMonthCustomers.length > 0 && (
+            
+            <div className="bg-white p-3 rounded-lg border border-gray-200 mb-4 shadow-sm flex flex-col gap-3">
+              <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
+                <Search className="w-4 h-4 text-gray-400" />
+                <input 
+                  type="text" 
+                  placeholder="Search customers..." 
+                  className="bg-transparent w-full outline-none text-sm"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                {searchTerm && <button onClick={() => setSearchTerm('')}><XCircle className="w-4 h-4 text-gray-400" /></button>}
+              </div>
+              <div className="flex justify-between items-center border-t border-gray-100 pt-2">
+                <span className="text-xs font-bold text-gray-500 uppercase">Viewing List For:</span>
+                <input type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} className="bg-transparent font-medium text-slate-800 outline-none text-right" />
+              </div>
+            </div>
+
+            {visibleCustomers.length === 0 && previousMonthCustomers.length > 0 && !searchTerm && (
               <div className="bg-blue-600 rounded-xl p-4 mb-4 text-white flex flex-col items-start gap-2 shadow-lg animate-in slide-in-from-top duration-300">
                 <div className="flex items-center gap-2"><CalendarDays className="w-5 h-5 text-blue-200" /><p className="font-bold">New Month Setup</p></div>
                 <p className="text-sm text-blue-100">Found {previousMonthCustomers.length} customers from last month. Import them?</p>
@@ -851,9 +1006,14 @@ export default function App() {
              <h2 className="text-2xl font-bold text-slate-800 mb-6">Monthly Report</h2>
              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6 flex flex-col gap-4">
                 <div><label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Select Month</label><input type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} className="w-full p-2 border border-gray-200 rounded-lg font-medium text-slate-700 outline-none focus:border-blue-500" /></div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button onClick={handleExportData} className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-blue-700 shadow-md"><Download className="w-5 h-5" /> Backup</button>
-                  <button onClick={handleRestoreClick} className="w-full py-3 bg-gray-100 text-gray-700 font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-gray-200 border border-gray-200"><Upload className="w-5 h-5" /> Restore</button>
+                
+                <div className="grid grid-cols-1 gap-3">
+                   <button onClick={handleExportExcel} className="w-full py-3 bg-green-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 hover:bg-green-700 shadow-md"><FileSpreadsheet className="w-5 h-5" /> Export Monthly Plan (Excel)</button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mt-2 pt-4 border-t border-gray-100">
+                  <button onClick={handleExportData} className="w-full py-2 bg-blue-50 text-blue-600 font-bold rounded-lg flex items-center justify-center gap-2 hover:bg-blue-100 border border-blue-200 text-sm"><Download className="w-4 h-4" /> Backup Data</button>
+                  <button onClick={handleRestoreClick} className="w-full py-2 bg-gray-50 text-gray-600 font-bold rounded-lg flex items-center justify-center gap-2 hover:bg-gray-200 border border-gray-200 text-sm"><Upload className="w-4 h-4" /> Restore Data</button>
                   <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".json" />
                 </div>
                 {isRestoring && <p className="text-center text-xs text-blue-500 font-bold animate-pulse">Restoring data...</p>}

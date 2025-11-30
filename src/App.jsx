@@ -53,10 +53,12 @@ import {
   setDoc
 } from 'firebase/firestore';
 
-// ==============================================================================================
-// 1. UNCOMMENT THE LINE BELOW IN YOUR LOCAL PROJECT FOR EXCEL EXPORT
+// ==========================================================================
+// [ACTION REQUIRED FOR VERCEL]
+// 1. Run 'npm install xlsx' in your terminal
+// 2. UNCOMMENT the line below before pushing to GitHub:
  import * as XLSX from 'xlsx';
-// ==============================================================================================
+// ==========================================================================
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -182,10 +184,15 @@ const calculateMonthlyPotential = (customer, monthStr, deliveries) => {
   const daysInMonth = new Date(year, month, 0).getDate(); 
   
   let total = 0;
+  const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
+
   for (let d = 1; d <= daysInMonth; d++) {
-    const date = new Date(year, month - 1, d);
-    const dayName = DAYS_OF_WEEK[date.getDay()];
-    total += getQtyForDay(customer, dayName);
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    if (dateStr >= effectiveStartDate) {
+      const date = new Date(year, month - 1, d);
+      const dayName = DAYS_OF_WEEK[date.getDay()];
+      total += getQtyForDay(customer, dayName);
+    }
   }
 
   const extraItems = deliveries.filter(d => 
@@ -210,24 +217,28 @@ const calculateRemainingPotential = (customer, monthStr, deliveries) => {
   const [year, month] = monthStr.split('-').map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
   const todayDate = new Date().getDate(); 
+  const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
 
   let remaining = 0;
 
   for (let d = todayDate; d <= daysInMonth; d++) {
     const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dayName = getDayNameFromDateString(dateStr);
-    const dailyQty = getQtyForDay(customer, dayName);
+    
+    if (dateStr >= effectiveStartDate) {
+        const dayName = getDayNameFromDateString(dateStr);
+        const dailyQty = getQtyForDay(customer, dayName);
 
-    if (dailyQty > 0) {
-      const existingStatus = deliveries.find(del => 
-        del.customerId === customer.id && 
-        del.date === dateStr &&
-        !del.isRescheduled 
-      )?.status;
+        if (dailyQty > 0) {
+        const existingStatus = deliveries.find(del => 
+            del.customerId === customer.id && 
+            del.date === dateStr &&
+            !del.isRescheduled 
+        )?.status;
 
-      if (existingStatus !== 'delivered' && existingStatus !== 'skipped') {
-        remaining += dailyQty;
-      }
+        if (existingStatus !== 'delivered' && existingStatus !== 'skipped') {
+            remaining += dailyQty;
+        }
+        }
     }
   }
 
@@ -417,6 +428,12 @@ const CustomerForm = ({ onClose, onSave, defaultMonth, initialData = null }) => 
   const [phone, setPhone] = useState(initialData?.phone || '');
   const [address, setAddress] = useState(initialData?.address || '');
   const [targetMonth, setTargetMonth] = useState(initialData?.targetMonth || defaultMonth || getCurrentMonthString());
+  const [startDate, setStartDate] = useState(() => {
+    if (initialData?.startDate) return initialData.startDate;
+    const today = getTodayString();
+    const firstOfMonth = `${defaultMonth}-01`;
+    return today.startsWith(defaultMonth) ? today : firstOfMonth; 
+  });
   const [scheduleMap, setScheduleMap] = useState(() => {
     if (initialData?.schedule) {
       if (Array.isArray(initialData.schedule)) {
@@ -430,7 +447,7 @@ const CustomerForm = ({ onClose, onSave, defaultMonth, initialData = null }) => 
 
   const toggleDay = (day) => { const newMap = { ...scheduleMap }; if (newMap[day] !== undefined) { delete newMap[day]; } else { newMap[day] = 1; } setScheduleMap(newMap); };
   const updateDayQty = (day, qty) => { if (scheduleMap[day] !== undefined) { setScheduleMap({ ...scheduleMap, [day]: parseFloat(qty) }); } };
-  const handleSubmit = (e) => { e.preventDefault(); if (!address.trim()) return; if (Object.keys(scheduleMap).length === 0) return; onSave({ id: initialData?.id, name, phone, address, schedule: scheduleMap, targetMonth }); onClose(); };
+  const handleSubmit = (e) => { e.preventDefault(); if (!address.trim()) return; if (Object.keys(scheduleMap).length === 0) return; onSave({ id: initialData?.id, name, phone, address, schedule: scheduleMap, targetMonth, startDate }); onClose(); };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-in fade-in">
@@ -438,6 +455,11 @@ const CustomerForm = ({ onClose, onSave, defaultMonth, initialData = null }) => 
         <div className="bg-blue-600 p-4 shrink-0 flex justify-between items-center"><h2 className="text-white font-bold text-lg flex items-center gap-2"><Users className="w-5 h-5" /> {initialData ? 'Edit Customer' : 'Add Customer'}</h2><button onClick={onClose} className="text-blue-100 hover:text-white"><LogOut className="w-5 h-5 rotate-180" /></button></div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
           <div className="bg-blue-50 p-3 rounded-lg border border-blue-100"><label className="block text-xs font-bold text-blue-800 uppercase mb-1">Billing Month</label><input type="month" required className="w-full p-2 bg-white border border-blue-200 rounded text-blue-900 font-medium outline-none" value={targetMonth} onChange={(e) => setTargetMonth(e.target.value)} /></div>
+          <div className="bg-green-50 p-3 rounded-lg border border-green-100">
+            <label className="block text-xs font-bold text-green-800 uppercase mb-1 flex items-center gap-1"><CalendarDays className="w-3 h-3" /> Effective Start Date</label>
+            <input type="date" required className="w-full p-2 bg-white border border-green-200 rounded text-green-900 font-medium outline-none" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            <p className="text-[10px] text-green-700 mt-1">Milk counting starts from this date.</p>
+          </div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1">Customer Name</label><input required type="text" className="w-full p-3 border border-gray-300 rounded-lg outline-none" value={name} onChange={(e) => setName(e.target.value)} /></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1">Address</label><textarea required className="w-full p-3 border border-gray-300 rounded-lg outline-none" rows="2" value={address} onChange={(e) => setAddress(e.target.value)} /></div>
           <div><label className="block text-sm font-medium text-gray-700 mb-1">Phone</label><input type="tel" className="w-full p-3 border border-gray-300 rounded-lg outline-none" value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
@@ -467,6 +489,9 @@ export default function App() {
   
   const [viewMonth, setViewMonth] = useState(getCurrentMonthString());
   const [todayViewDate, setTodayViewDate] = useState(getTodayString()); 
+  
+  // NEW: Daily Report Date State
+  const [reportDailyDate, setReportDailyDate] = useState(getTodayString());
 
   const [isImporting, setIsImporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -530,7 +555,9 @@ export default function App() {
           
           const deliveryRef = doc(db, 'artifacts', appId, 'public', 'data', storePath, 'deliveries', delivery.id);
 
-          if (newQty > 0) {
+          const isDateValid = delivery.date >= dataToSave.startDate;
+
+          if (newQty > 0 && isDateValid) {
             if (delivery.qty !== newQty) {
               batch.update(deliveryRef, { qty: newQty });
             }
@@ -589,85 +616,106 @@ export default function App() {
     } catch (e) { console.error(e); setIsImporting(false); }
   };
 
-  // =========================================================================================
-  // UNCOMMENT THE FUNCTION BELOW AND DELETE THE CSV FUNCTION WHEN DEPLOYING TO VERCEL
-  // =========================================================================================
+  // --- 1. EXCEL EXPORT FUNCTION (UNCOMMENT THIS FOR VERCEL) ---
   
   const handleExportExcel = () => {
-     const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
-     if (customersToExport.length === 0) {
-       alert("No customers found for " + viewMonth);
-       return;
-     }
-     
-     // Check if XLSX is available (will be true in your local environment after npm install)
-     if (typeof XLSX === 'undefined') {
-       alert("Excel library not loaded. Please use CSV export for now.");
-       return;
-     }
-  
-     const wb = XLSX.utils.book_new();
-     const [year, month] = viewMonth.split('-').map(Number);
-     const daysInMonth = new Date(year, month, 0).getDate();
-  
-     customersToExport.forEach(customer => {
-       const wsData = [
-         ['Customer Name:', customer.name],
-         ['Phone:', customer.phone || '-'],
-         ['Address:', customer.address || '-'],
-         [],
-         ['Date', 'Day', 'Quantity (L)', 'Status']
-       ];
-  
-       for (let d = 1; d <= daysInMonth; d++) {
-         const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-         const dayName = getDayNameFromDateString(dateStr);
-         
-         const plannedQty = getQtyForDay(customer, dayName);
-         const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
-         
-         let qtyDisplay = '-';
-         let status = 'No Delivery';
-  
-         if (plannedQty > 0 || delivery) {
-            qtyDisplay = plannedQty > 0 ? plannedQty : '-';
-            status = 'Pending'; 
-  
-            if (delivery) {
-              if (delivery.isRescheduled) {
-                qtyDisplay = delivery.qty + ' (Rescheduled)';
-                status = 'Extra';
-              } else if (delivery.status === 'delivered') {
-                status = 'Delivered';
-              } else if (delivery.status === 'skipped') {
-                status = 'Skipped';
-                qtyDisplay = '0'; 
-              }
-            }
-            wsData.push([dateStr, dayName, qtyDisplay, status]);
-         } else {
-             wsData.push([dateStr, dayName, qtyDisplay, status]);
-         }
-       }
-  
-       const ws = XLSX.utils.aoa_to_sheet(wsData);
-       let sheetName = (customer.name || 'Customer').replace(/[\\/?*[\]]/g, "").substring(0, 30);
-       let uniqueSheetName = sheetName;
-       let counter = 1;
-       while (wb.SheetNames.includes(uniqueSheetName)) {
-         uniqueSheetName = `${sheetName.substring(0, 25)}_${counter}`;
-         counter++;
-       }
-       XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName);
-     });
-  
-     XLSX.writeFile(wb, `MilkRoute_Plan_${viewMonth}.xlsx`);
-  };
+    const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
+    if (customersToExport.length === 0) {
+      alert("No customers found for " + viewMonth);
+      return;
+    }
+    
+    // IMPORTANT: Ensure XLSX is imported at the top
+    if (typeof XLSX === 'undefined') {
+      alert("Excel library not loaded. Please run 'npm install xlsx' locally.");
+      return;
+    }
 
+    const wb = XLSX.utils.book_new();
+    const [year, month] = viewMonth.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    // --- SUMMARY SHEET ---
+    const summaryHeaders = ['Customer Name', 'Phone', 'Address', 'Total Planned', 'Total Delivered', 'Remaining'];
+    const summaryRows = [];
+    let grandTotalDelivered = 0;
+    let grandTotalRemaining = 0;
+
+    customersToExport.forEach(c => {
+        const stats = calculateMonthlyPotential(c, viewMonth, deliveries);
+        const remaining = calculateRemainingPotential(c, viewMonth, deliveries);
+        const delivered = deliveredStats[c.id] || 0;
+        grandTotalDelivered += delivered;
+        grandTotalRemaining += remaining;
+        summaryRows.push([c.name, c.phone || '-', c.address || '-', stats.total, delivered, remaining]);
+    });
+    summaryRows.push([]);
+    summaryRows.push(['GRAND TOTAL', '', '', '', grandTotalDelivered, grandTotalRemaining]);
+    
+    const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeaders, ...summaryRows]);
+    XLSX.utils.book_append_sheet(wb, wsSummary, "SUMMARY");
+
+    // --- INDIVIDUAL SHEETS ---
+    customersToExport.forEach(customer => {
+      const wsData = [
+        ['Customer Name:', customer.name],
+        ['Phone:', customer.phone || '-'],
+        ['Address:', customer.address || '-'],
+        [],
+        ['Date', 'Day', 'Quantity (L)', 'Status']
+      ];
+
+      const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dayName = getDayNameFromDateString(dateStr);
+        
+        const plannedQty = getQtyForDay(customer, dayName);
+        const delivery = deliveries.find(del => del.customerId === customer.id && del.date === dateStr);
+        
+        let qtyDisplay = '-';
+        let status = 'No Delivery';
+        const isDateValid = dateStr >= effectiveStartDate;
+
+        if ((plannedQty > 0 && isDateValid) || delivery) {
+           qtyDisplay = (plannedQty > 0 && isDateValid) ? plannedQty : '-';
+           status = 'Pending'; 
+
+           if (delivery) {
+             if (delivery.isRescheduled) {
+               qtyDisplay = delivery.qty + ' (Rescheduled)';
+               status = 'Extra';
+             } else if (delivery.status === 'delivered') {
+               status = 'Delivered';
+             } else if (delivery.status === 'skipped') {
+               status = 'Skipped';
+               qtyDisplay = '0'; 
+             }
+           }
+           wsData.push([dateStr, dayName, qtyDisplay, status]);
+        } else {
+            wsData.push([dateStr, dayName, qtyDisplay, status]);
+        }
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      let sheetName = (customer.name || 'Customer').replace(/[\\/?*[\]]/g, "").substring(0, 30);
+      let uniqueSheetName = sheetName;
+      let counter = 1;
+      while (wb.SheetNames.includes(uniqueSheetName)) {
+        uniqueSheetName = `${sheetName.substring(0, 25)}_${counter}`;
+        counter++;
+      }
+      XLSX.utils.book_append_sheet(wb, ws, uniqueSheetName);
+    });
+
+    XLSX.writeFile(wb, `MilkRoute_Plan_${viewMonth}.xlsx`);
+  };
+  
   /*
-  // =========================================================================================
-  // TEMPORARY CSV EXPORT (DELETE THIS FUNCTION WHEN USING THE EXCEL ONE ABOVE)
-  // =========================================================================================
+  // --- 2. TEMPORARY CSV EXPORT (ACTIVE IN PREVIEW) ---
+  // DELETE THIS FUNCTION when you deploy to Vercel and use the Excel one above
   const handleExportExcel = () => {
     const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
     if (customersToExport.length === 0) {
@@ -703,13 +751,13 @@ export default function App() {
                status = 'Skipped';
                qtyDisplay = '0'; 
              }
-          }
-          
-          const safeName = `"${(customer.name || '').replace(/"/g, '""')}"`;
-          const safePhone = `"${(customer.phone || '').replace(/"/g, '""')}"`;
-          const safeAddress = `"${(customer.address || '').replace(/"/g, '""')}"`;
+           }
+           
+           const safeName = `"${(customer.name || '').replace(/"/g, '""')}"`;
+           const safePhone = `"${(customer.phone || '').replace(/"/g, '""')}"`;
+           const safeAddress = `"${(customer.address || '').replace(/"/g, '""')}"`;
 
-          csvContent += `${safeName},${safePhone},${safeAddress},${dateStr},${dayName},"${qtyDisplay}",${status}\n`;
+           csvContent += `${safeName},${safePhone},${safeAddress},${dateStr},${dayName},"${qtyDisplay}",${status}\n`;
         }
       }
     });
@@ -722,7 +770,6 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
   };
-  */
 
   const handleExportData = () => {
     if (!storeId) return;
@@ -731,7 +778,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a'); link.href = url; link.download = `milk-route-backup-${getTodayString()}.json`;
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  };
+  };*/
 
   const handleRestoreClick = () => { if (fileInputRef.current) fileInputRef.current.click(); };
 
@@ -773,13 +820,15 @@ export default function App() {
     try {
       const batch = writeBatch(db);
       newDeliveries.forEach(customer => {
+        if (customer.startDate && selectedDate < customer.startDate) return;
+
         const newDocRef = doc(collection(db, 'artifacts', appId, 'public', 'data', `stores/${storeId}`, 'deliveries'));
         batch.set(newDocRef, { 
           customerId: customer.id, 
           customerName: customer.name, 
           customerAddress: customer.address, 
           qty: getQtyForDay(customer, todayDayName), 
-          date: selectedDate, // Use selected date
+          date: selectedDate, 
           status: 'pending', 
           timestamp: serverTimestamp() 
         });
@@ -850,6 +899,17 @@ export default function App() {
   const deliveredStats = useMemo(() => deliveries.filter(d => d.date.startsWith(viewMonth) && d.status === 'delivered').reduce((acc, curr) => {
     acc[curr.customerId] = (acc[curr.customerId] || 0) + curr.qty; return acc;
   }, {}), [deliveries, viewMonth]);
+
+  const grandTotalDelivered = useMemo(() => {
+    return Object.values(reportData).reduce((sum, curr) => sum + curr.totalQty, 0);
+  }, [reportData]);
+
+  // NEW: Calculate Daily Total for specific date
+  const reportDayTotal = useMemo(() => {
+      return deliveries
+          .filter(d => d.date === reportDailyDate && d.status === 'delivered')
+          .reduce((sum, curr) => sum + curr.qty, 0);
+  }, [deliveries, reportDailyDate]);
 
   if (authError) return <AuthErrorView error={authError} />;
   if (!user) return <Loading message="Authenticating..." />;
@@ -1004,6 +1064,35 @@ export default function App() {
         {activeTab === 'reports' && (
           <div className="animate-in slide-in-from-right duration-300">
              <h2 className="text-2xl font-bold text-slate-800 mb-6">Monthly Report</h2>
+             
+             {/* NEW: Total Summary Card */}
+             <div className="bg-blue-600 text-white rounded-2xl p-6 shadow-lg mb-6 flex items-center justify-between">
+                <div>
+                  <p className="text-blue-200 text-sm font-bold uppercase tracking-wide mb-1">Total Delivered ({viewMonth})</p>
+                  <p className="text-4xl font-extrabold">{grandTotalDelivered} <span className="text-lg font-medium opacity-70">Liters</span></p>
+                </div>
+                <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm">
+                  <Milk className="w-6 h-6 text-white" />
+                </div>
+             </div>
+
+             {/* NEW: Daily Summary Card */}
+             <div className="bg-emerald-600 text-white rounded-2xl p-6 shadow-lg mb-6 flex flex-col gap-3">
+                <div className="flex justify-between items-center">
+                    <p className="text-emerald-200 text-sm font-bold uppercase tracking-wide">Daily Delivered</p>
+                    <input 
+                        type="date" 
+                        value={reportDailyDate} 
+                        onChange={e => setReportDailyDate(e.target.value)} 
+                        className="bg-emerald-700 text-white border-none rounded px-2 py-1 text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-400" 
+                    />
+                </div>
+                <div className="flex justify-between items-end">
+                     <p className="text-4xl font-extrabold">{reportDayTotal} <span className="text-lg font-medium opacity-70">Liters</span></p>
+                     <p className="text-xs text-emerald-200 opacity-80">{getFormattedDate(reportDailyDate)}</p>
+                </div>
+             </div>
+
              <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-6 flex flex-col gap-4">
                 <div><label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Select Month</label><input type="month" value={viewMonth} onChange={(e) => setViewMonth(e.target.value)} className="w-full p-2 border border-gray-200 rounded-lg font-medium text-slate-700 outline-none focus:border-blue-500" /></div>
                 
