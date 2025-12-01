@@ -54,9 +54,9 @@ import {
 } from 'firebase/firestore';
 
 // ==========================================================================================
-// [DEPLOYMENT STEP] 
+// [ACTION REQUIRED FOR VERCEL DEPLOYMENT]
 // 1. Run 'npm install xlsx' in your local terminal
-// 2. UNCOMMENT the line below to enable real Excel export on Vercel:
+// 2. UNCOMMENT the import below:
  import * as XLSX from 'xlsx';
 // ==========================================================================================
 
@@ -184,7 +184,6 @@ const calculateMonthlyPotential = (customer, monthStr, deliveries) => {
   const daysInMonth = new Date(year, month, 0).getDate(); 
   
   let total = 0;
-  // Default to start of month if no specific start date set
   const effectiveStartDate = customer.startDate ? customer.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
 
   for (let d = 1; d <= daysInMonth; d++) {
@@ -491,7 +490,6 @@ export default function App() {
   const [viewMonth, setViewMonth] = useState(getCurrentMonthString());
   const [todayViewDate, setTodayViewDate] = useState(getTodayString()); 
   
-  // NEW: Daily Report Date State
   const [reportDailyDate, setReportDailyDate] = useState(getTodayString());
 
   const [isImporting, setIsImporting] = useState(false);
@@ -617,8 +615,12 @@ export default function App() {
     } catch (e) { console.error(e); setIsImporting(false); }
   };
 
-  // --- 1. EXCEL EXPORT (UNCOMMENT FOR VERCEL) ---
-   const handleExportExcel = () => {
+  
+
+  // --- 2. REAL EXCEL EXPORT (FOR VERCEL DEPLOYMENT) ---
+  // UNCOMMENT THIS FUNCTION (AND DELETE THE ONE ABOVE) WHEN PUSHING TO GITHUB
+  
+  const handleExportExcel = () => {
      const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
      if (customersToExport.length === 0) {
        alert("No customers found for " + viewMonth);
@@ -713,9 +715,6 @@ export default function App() {
   };
   
 
-  // --- 2. TEMPORARY CSV EXPORT (PREVIEW SAFE) ---
-  // DELETE THIS WHOLE FUNCTION WHEN DEPLOYING TO VERCEL
-  
   const handleExportData = () => {
     if (!storeId) return;
     const exportData = { store: storeId, exportedAt: new Date().toISOString(), customers: customers, deliveries: deliveries };
@@ -849,12 +848,23 @@ export default function App() {
     return Object.values(reportData).reduce((sum, curr) => sum + curr.totalQty, 0);
   }, [reportData]);
 
-  // NEW: Calculate Daily Total for specific date
   const reportDayTotal = useMemo(() => {
       return deliveries
           .filter(d => d.date === reportDailyDate && d.status === 'delivered')
           .reduce((sum, curr) => sum + curr.qty, 0);
   }, [deliveries, reportDailyDate]);
+
+  const dailyRunStats = useMemo(() => {
+    const totalQty = currentViewDeliveries.reduce((sum, d) => sum + d.qty, 0);
+    const deliveredQty = currentViewDeliveries
+      .filter(d => d.status === 'delivered')
+      .reduce((sum, d) => sum + d.qty, 0);
+    
+    const totalStops = currentViewDeliveries.length;
+    const completedStops = currentViewDeliveries.filter(d => d.status === 'delivered').length;
+
+    return { totalQty, deliveredQty, totalStops, completedStops };
+  }, [currentViewDeliveries]);
 
   if (authError) return <AuthErrorView error={authError} />;
   if (!user) return <Loading message="Authenticating..." />;
@@ -884,7 +894,14 @@ export default function App() {
                   />
                 </div>
               </div>
-              <div className="text-right"><span className="text-3xl font-bold text-blue-600">{currentViewDeliveries.filter(d => d.status === 'delivered').length}<span className="text-lg text-gray-400 font-normal">/{currentViewDeliveries.length}</span></span></div>
+              <div className="text-right">
+                <div className="text-3xl font-bold text-blue-600 leading-none">
+                  {dailyRunStats.deliveredQty} <span className="text-lg text-gray-400 font-normal">/ {dailyRunStats.totalQty} L</span>
+                </div>
+                <div className="text-xs text-gray-400 font-medium mt-1">
+                  {dailyRunStats.completedStops} / {dailyRunStats.totalStops} Stops
+                </div>
+              </div>
             </div>
             {currentViewDeliveries.length === 0 ? (
               <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 text-center space-y-4">
@@ -935,7 +952,12 @@ export default function App() {
         {/* CUSTOMERS TAB */}
         {activeTab === 'customers' && (
           <div className="animate-in slide-in-from-right duration-300 pb-20">
-            <div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-bold text-slate-800">Customers</h2><button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                Customers 
+                <span className="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-medium">{visibleCustomers.length}</span>
+                </h2>
+                <button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
             
             <div className="bg-white p-3 rounded-lg border border-gray-200 mb-4 shadow-sm flex flex-col gap-3">
               <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
