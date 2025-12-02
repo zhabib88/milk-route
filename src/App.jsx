@@ -57,7 +57,7 @@ import {
 // [ACTION REQUIRED FOR VERCEL DEPLOYMENT]
 // 1. Run 'npm install xlsx' in your local terminal
 // 2. UNCOMMENT the import below:
- import * as XLSX from 'xlsx';
+// import * as XLSX from 'xlsx';
 // ==========================================================================================
 
 // --- FIREBASE CONFIGURATION ---
@@ -616,8 +616,8 @@ export default function App() {
     } catch (e) { console.error(e); setIsImporting(false); }
   };
 
-  // --- 2. REAL EXCEL EXPORT (FOR VERCEL DEPLOYMENT) ---
-  // UNCOMMENT THIS FUNCTION (AND DELETE THE ONE ABOVE) WHEN PUSHING TO GITHUB
+  // --- 1. REAL EXCEL EXPORT (FOR VERCEL DEPLOYMENT) ---
+  // UNCOMMENT THIS FUNCTION (AND DELETE THE ONE BELOW) WHEN PUSHING TO GITHUB
   
   const handleExportExcel = () => {
      const customersToExport = customers.filter(c => c.targetMonth === viewMonth);
@@ -713,7 +713,6 @@ export default function App() {
      XLSX.writeFile(wb, `MilkRoute_Plan_${viewMonth}.xlsx`);
   };
   
-
   const handleExportData = () => {
     if (!storeId) return;
     const exportData = { store: storeId, exportedAt: new Date().toISOString(), customers: customers, deliveries: deliveries };
@@ -964,7 +963,12 @@ export default function App() {
         {/* CUSTOMERS TAB */}
         {activeTab === 'customers' && (
           <div className="animate-in slide-in-from-right duration-300 pb-20">
-            <div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-bold text-slate-800">Customers</h2><button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
+            <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                Customers 
+                <span className="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-medium">{visibleCustomers.length}</span>
+                </h2>
+                <button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
             
             <div className="bg-white p-3 rounded-lg border border-gray-200 mb-4 shadow-sm flex flex-col gap-3">
               <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
