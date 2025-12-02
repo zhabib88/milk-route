@@ -57,7 +57,7 @@ import {
 // [ACTION REQUIRED FOR VERCEL DEPLOYMENT]
 // 1. Run 'npm install xlsx' in your local terminal
 // 2. UNCOMMENT the import below:
-// import * as XLSX from 'xlsx';
+ import * as XLSX from 'xlsx';
 // ==========================================================================================
 
 // --- FIREBASE CONFIGURATION ---
