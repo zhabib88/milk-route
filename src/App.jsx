@@ -490,6 +490,7 @@ export default function App() {
   const [viewMonth, setViewMonth] = useState(getCurrentMonthString());
   const [todayViewDate, setTodayViewDate] = useState(getTodayString()); 
   
+  // NEW: Daily Report Date State
   const [reportDailyDate, setReportDailyDate] = useState(getTodayString());
 
   const [isImporting, setIsImporting] = useState(false);
@@ -614,8 +615,6 @@ export default function App() {
       setTimeout(() => setIsImporting(false), 500);
     } catch (e) { console.error(e); setIsImporting(false); }
   };
-
-  
 
   // --- 2. REAL EXCEL EXPORT (FOR VERCEL DEPLOYMENT) ---
   // UNCOMMENT THIS FUNCTION (AND DELETE THE ONE ABOVE) WHEN PUSHING TO GITHUB
@@ -848,6 +847,19 @@ export default function App() {
     return Object.values(reportData).reduce((sum, curr) => sum + curr.totalQty, 0);
   }, [reportData]);
 
+  // NEW: Grand Total Planned Calculation
+  const grandTotalPlanned = useMemo(() => {
+    return visibleCustomers.reduce((sum, customer) => {
+      return sum + calculateMonthlyPotential(customer, viewMonth, deliveries).total;
+    }, 0);
+  }, [visibleCustomers, viewMonth, deliveries]);
+
+  // NEW: Grand Total Progress %
+  const grandTotalProgress = useMemo(() => {
+    return grandTotalPlanned > 0 ? (grandTotalDelivered / grandTotalPlanned) * 100 : 0;
+  }, [grandTotalDelivered, grandTotalPlanned]);
+
+
   const reportDayTotal = useMemo(() => {
       return deliveries
           .filter(d => d.date === reportDailyDate && d.status === 'delivered')
@@ -952,12 +964,7 @@ export default function App() {
         {/* CUSTOMERS TAB */}
         {activeTab === 'customers' && (
           <div className="animate-in slide-in-from-right duration-300 pb-20">
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                Customers 
-                <span className="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-medium">{visibleCustomers.length}</span>
-                </h2>
-                <button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
+            <div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-bold text-slate-800">Customers</h2><button onClick={() => { setEditingCustomer(null); setShowCustomerModal(true); }} className="bg-blue-600 text-white p-2 rounded-full shadow-lg hover:bg-blue-700 active:scale-90 transition-transform"><Plus className="w-6 h-6" /></button></div>
             
             <div className="bg-white p-3 rounded-lg border border-gray-200 mb-4 shadow-sm flex flex-col gap-3">
               <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
@@ -1032,14 +1039,30 @@ export default function App() {
           <div className="animate-in slide-in-from-right duration-300">
              <h2 className="text-2xl font-bold text-slate-800 mb-6">Monthly Report</h2>
              
-             {/* NEW: Total Summary Card */}
-             <div className="bg-blue-600 text-white rounded-2xl p-6 shadow-lg mb-6 flex items-center justify-between">
-                <div>
-                  <p className="text-blue-200 text-sm font-bold uppercase tracking-wide mb-1">Total Delivered ({viewMonth})</p>
-                  <p className="text-4xl font-extrabold">{grandTotalDelivered} <span className="text-lg font-medium opacity-70">Liters</span></p>
+             {/* NEW: Total Summary Card with Progress Bar */}
+             <div className="bg-blue-600 text-white rounded-2xl p-6 shadow-lg mb-6">
+                <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-blue-200 text-sm font-bold uppercase tracking-wide mb-1">Total Delivered ({viewMonth})</p>
+                      <p className="text-4xl font-extrabold">{grandTotalDelivered} <span className="text-lg font-medium opacity-70">Liters</span></p>
+                    </div>
+                    <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm">
+                      <Milk className="w-6 h-6 text-white" />
+                    </div>
                 </div>
-                <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-sm">
-                  <Milk className="w-6 h-6 text-white" />
+
+                {/* PROGRESS BAR */}
+                <div>
+                    <div className="flex justify-between text-xs font-bold text-blue-200 mb-1">
+                        <span>Progress</span>
+                        <span>{Math.round(grandTotalProgress)}% of {grandTotalPlanned}L Goal</span>
+                    </div>
+                    <div className="w-full bg-blue-900/30 rounded-full h-3 overflow-hidden">
+                        <div 
+                            className="bg-white h-full rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(255,255,255,0.5)]" 
+                            style={{ width: `${Math.min(100, grandTotalProgress)}%` }}
+                        />
+                    </div>
                 </div>
              </div>
 
